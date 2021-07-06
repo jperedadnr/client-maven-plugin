@@ -51,6 +51,7 @@ import org.eclipse.aether.artifact.DefaultArtifact;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -58,6 +59,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -150,7 +152,7 @@ public abstract class NativeBaseMojo extends AbstractMojo {
         return new SubstrateDispatcher(outputDir, substrateConfiguration);
     }
 
-    private ProjectConfiguration createSubstrateConfiguration() {
+    private ProjectConfiguration createSubstrateConfiguration() throws MojoExecutionException {
         ProjectConfiguration clientConfig = new ProjectConfiguration(mainClass, getProjectClasspath());
 
         clientConfig.setGraalPath(Path.of(getGraalvmHome().get()));
@@ -205,9 +207,10 @@ public abstract class NativeBaseMojo extends AbstractMojo {
         return processDestroyer;
     }
 
-    private String getProjectClasspath() {
+    private String getProjectClasspath() throws MojoExecutionException {
         List<File> classPath = getClasspathElements(project);
         getLog().debug("classPath = " + classPath);
+        classPath.addAll(getSubstrate());
         return classPath.stream()
                 .map(File::getAbsolutePath)
                 .collect(Collectors.joining(File.pathSeparator));
@@ -301,5 +304,38 @@ public abstract class NativeBaseMojo extends AbstractMojo {
     Optional<String> getGraalvmHome() {
         return Optional.ofNullable(graalvmHome)
                 .or(() -> Optional.ofNullable(System.getenv("GRAALVM_HOME")));
+    }
+
+    private List<File> getSubstrate() throws MojoExecutionException {
+        try {
+            PropertiesReader reader = new PropertiesReader("gluonfx-maven-plugin.properties");
+            String substrateVersion = reader.getProperty("substrate.version");
+            getLog().debug("This plugin was build with Substrate: " + substrateVersion);
+            DefaultArtifact substrateArtifact = new DefaultArtifact("com.gluonhq", "substrate", null, "jar", substrateVersion);
+            Set<Artifact> resolve = MavenArtifactResolver.getInstance().resolve(substrateArtifact);
+            if (resolve != null) {
+                return resolve.stream()
+                        .distinct()
+                        .map(Artifact::getFile)
+                        .collect(Collectors.toList());
+            }
+        } catch (IOException e) {
+            throw new MojoExecutionException("Error retrieving properties " + e.getMessage());
+        }
+        return List.of();
+    }
+
+    private static class PropertiesReader {
+        private final Properties properties;
+
+        public PropertiesReader(String propertyFileName) throws IOException {
+            InputStream is = getClass().getClassLoader().getResourceAsStream(propertyFileName);
+            this.properties = new Properties();
+            this.properties.load(is);
+        }
+
+        public String getProperty(String propertyName) {
+            return this.properties.getProperty(propertyName);
+        }
     }
 }
